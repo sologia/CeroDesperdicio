@@ -75,7 +75,7 @@ def busqueda_lineal(inventario, texto):
 def ordenar_por_codigo(inventario):
     return sorted(
         inventario,
-        key=lambda alimento: alimento.codigo
+        key=lambda alimento: int(alimento.codigo) if str(alimento.codigo).isdigit() else 0
     )
 
 def busqueda_binaria(inventario, codigo):

@@ -14,6 +14,7 @@ from gestion import (
     ordenar_por_vencimiento
 )
 from asistente_ia import consultar_ia, generar_recetas
+import catalogo
 from estilos import *
 
 
@@ -184,6 +185,13 @@ class Aplicacion:
             ).pack(anchor="w", padx=32, pady=(0, 20))
 
     def boton(self, padre, texto, comando, color=MORADO):
+        boton = self._boton_base(padre, texto, comando, color)
+        boton.bind("<Enter>", lambda e: boton.config(bg=MORADO_CLARO)
+                   if str(boton["state"]) != "disabled" else None)
+        boton.bind("<Leave>", lambda e: boton.config(bg=color))
+        return boton
+
+    def _boton_base(self, padre, texto, comando, color):
         return tk.Button(
             padre,
             text=texto,
@@ -323,8 +331,16 @@ class Aplicacion:
 
         self.boton(
             acciones,
-            "+ Registrar alimento",
-            self.formulario_alimento
+            "🧊  Seleccionar lo que hay en mi refri",
+            self.seleccion_rapida,
+            color=TURQUESA
+        ).pack(anchor="w", pady=4)
+
+        self.boton(
+            acciones,
+            "+ Registrar alimento manualmente",
+            self.formulario_alimento,
+            color=PANEL_CLARO
         ).pack(anchor="w", pady=4)
 
         self.boton(
@@ -397,9 +413,16 @@ class Aplicacion:
 
         self.boton(
             fila,
-            "+ Agregar alimento",
-            self.formulario_alimento
+            "🧊  Desde mi refri",
+            self.seleccion_rapida,
+            color=TURQUESA
         ).pack(side="left", padx=(0, 8))
+
+        self.boton(
+            fila,
+            "+ Agregar manual",
+            self.formulario_alimento
+        ).pack(side="left", padx=8)
 
         self.boton(
             fila,
@@ -443,11 +466,22 @@ class Aplicacion:
 
         marco, self.tabla = self.crear_tabla(
             self.contenido,
-            ("codigo", "nombre", "cantidad", "unidad", "fecha", "categoria"),
-            ("Código", "Alimento", "Cantidad", "Unidad", "Vencimiento", "Categoría"),
-            (85, 180, 100, 90, 130, 120)
+            ("codigo", "nombre", "cantidad", "unidad", "fecha", "categoria",
+             "kcal", "proteina"),
+            ("Código", "Alimento", "Cantidad", "Unidad", "Vencimiento",
+             "Categoría", "Calorías", "Proteína"),
+            (75, 170, 85, 85, 120, 130, 100, 100)
+        )
+        self.tabla.bind("<<TreeviewSelect>>", self.mostrar_nutricion_seleccion)
+
+        self.etiqueta_nutricion = tk.Label(
+            self.contenido,
+            text="Selecciona un alimento para ver su información nutricional.",
+            bg=FONDO, fg=GRIS, font=("Segoe UI", 9), anchor="w"
         )
         marco.pack(fill="both", expand=True, padx=30, pady=(0, 25))
+        self.etiqueta_nutricion.pack(fill="x", padx=32, pady=(0, 12),
+                                     before=marco)
 
         self.actualizar_tabla()
 
@@ -458,18 +492,39 @@ class Aplicacion:
         alimentos = self.inventario if lista is None else lista
 
         for a in alimentos:
+            n = catalogo.nutricion_total(a.nombre, a.cantidad, a.unidad)
             self.tabla.insert(
                 "",
                 "end",
                 values=(
                     a.codigo,
                     a.nombre,
-                    a.cantidad,
+                    f"{float(a.cantidad):g}",
                     a.unidad,
                     a.fecha_vencimiento,
-                    a.categoria
+                    a.categoria,
+                    f"{n['kcal']:.0f} kcal" if n else "—",
+                    f"{n['proteina']:.1f} g" if n else "—"
                 )
             )
+
+    def mostrar_nutricion_seleccion(self, event=None):
+        alimento = self.obtener_seleccion() if self.tabla.selection() else None
+        if not alimento:
+            return
+        base = catalogo.nutricion_100g(alimento.nombre)
+        total = catalogo.nutricion_total(
+            alimento.nombre, alimento.cantidad, alimento.unidad
+        )
+        if not base:
+            texto = f"{alimento.nombre}: sin datos nutricionales en el catálogo."
+        else:
+            texto = (
+                f"{alimento.nombre}  —  Por 100 g: {catalogo.texto_nutricion(base)}"
+                f"\nTotal en inventario ({float(alimento.cantidad):g} "
+                f"{alimento.unidad}): {catalogo.texto_nutricion(total)}"
+            )
+        self.etiqueta_nutricion.config(text=texto, fg=TEXTO, justify="left")
 
     def filtrar_inventario(self):
         categoria = self.filtro_categoria.get()
@@ -491,7 +546,7 @@ class Aplicacion:
         ventana.grab_set()
 
         # Centrar el formulario respecto a la ventana principal.
-        ancho, alto = 600, 760
+        ancho, alto = 620, 830
         ventana.update_idletasks()
         x = self.ventana.winfo_rootx() + max(0, (self.ventana.winfo_width() - ancho) // 2)
         y = self.ventana.winfo_rooty() + max(0, (self.ventana.winfo_height() - alto) // 2)
@@ -589,8 +644,18 @@ class Aplicacion:
             fg=TURQUESA, font=("Segoe UI", 7, "bold")
         ).pack(side="right", padx=14)
 
-        etiqueta("Nombre del alimento")
-        campo_nombre = entrada(alimento.nombre if alimento else "")
+        etiqueta("Nombre del alimento", "Elige de la lista o escribe uno nuevo.")
+        nombre_var = tk.StringVar(value=alimento.nombre if alimento else "")
+        campo_nombre = ttk.Combobox(
+            cuerpo, textvariable=nombre_var,
+            values=sorted(catalogo.CATALOGO), style="Formulario.TCombobox"
+        )
+        campo_nombre.pack(fill="x", ipady=3)
+        info_nutricion = tk.Label(
+            cuerpo, text="", bg=FONDO, fg=TURQUESA,
+            font=("Segoe UI", 8), anchor="w", justify="left"
+        )
+        info_nutricion.pack(fill="x", pady=(4, 0))
 
         etiqueta("Cantidad y unidad")
         fila_cantidad = tk.Frame(cuerpo, bg=FONDO)
@@ -619,8 +684,16 @@ class Aplicacion:
         etiqueta("Fecha de vencimiento", "Selecciona el día en el calendario integrado.")
         fila_fecha = tk.Frame(cuerpo, bg=FONDO)
         fila_fecha.pack(fill="x")
+        def fecha_valida(texto):
+            try:
+                return date.fromisoformat(str(texto))
+            except (ValueError, TypeError):
+                return date.today()
+
         fecha_var = tk.StringVar(
-            value=alimento.fecha_vencimiento if alimento else date.today().isoformat()
+            value=fecha_valida(
+                alimento.fecha_vencimiento if alimento else None
+            ).isoformat()
         )
         campo_fecha = tk.Entry(
             fila_fecha, textvariable=fecha_var, state="readonly",
@@ -630,101 +703,95 @@ class Aplicacion:
         )
         campo_fecha.pack(side="left", fill="x", expand=True, ipady=9)
 
-        calendario_panel = tk.Frame(
-            cuerpo, bg=PANEL, highlightthickness=1,
-            highlightbackground=BORDE, padx=12, pady=10
+        # Calendario en ventana emergente: antes se dibujaba al final del
+        # formulario (que no cambia de tamaño) y quedaba cortado / sin poder
+        # hacer clic en los días.
+        meses = (
+            "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+            "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
         )
-        calendario_visible = [False]
-        fecha_calendario = [date.fromisoformat(fecha_var.get())]
-        calendario_cabecera = tk.Frame(calendario_panel, bg=PANEL)
-        calendario_cabecera.pack(fill="x")
-        calendario_dias = tk.Frame(calendario_panel, bg=PANEL)
-        calendario_dias.pack()
 
-        def dibujar_calendario():
-            for widget in calendario_cabecera.winfo_children():
-                widget.destroy()
-            for widget in calendario_dias.winfo_children():
-                widget.destroy()
+        def abrir_calendario():
+            popup = tk.Toplevel(ventana)
+            popup.title("Fecha de vencimiento")
+            popup.configure(bg=PANEL, padx=12, pady=10)
+            popup.resizable(False, False)
+            popup.transient(ventana)
+            popup.geometry(
+                f"+{fila_fecha.winfo_rootx()}"
+                f"+{fila_fecha.winfo_rooty() + fila_fecha.winfo_height() + 4}"
+            )
+            mes_visible = [fecha_valida(fecha_var.get()).replace(day=1)]
+            cab = tk.Frame(popup, bg=PANEL)
+            cab.pack(fill="x")
+            dias = tk.Frame(popup, bg=PANEL)
+            dias.pack(pady=(6, 0))
 
-            actual = fecha_calendario[0]
-            tk.Button(
-                calendario_cabecera, text="‹", width=3,
-                command=lambda: mover_mes(-1), bg=PANEL_CLARO,
-                fg=BLANCO, activebackground=MORADO, relief="flat",
-                cursor="hand2"
-            ).pack(side="left")
-            tk.Label(
-                calendario_cabecera,
-                text=f"{calendar.month_name[actual.month].title()} {actual.year}",
-                bg=PANEL, fg=BLANCO, font=("Segoe UI", 11, "bold")
-            ).pack(side="left", expand=True)
-            tk.Button(
-                calendario_cabecera, text="›", width=3,
-                command=lambda: mover_mes(1), bg=PANEL_CLARO,
-                fg=BLANCO, activebackground=MORADO, relief="flat",
-                cursor="hand2"
-            ).pack(side="right")
+            def cerrar_popup():
+                popup.grab_release()
+                popup.destroy()
+                ventana.grab_set()
 
-            for col, nombre_dia in enumerate(("L", "M", "X", "J", "V", "S", "D")):
-                tk.Label(
-                    calendario_dias, text=nombre_dia, width=5,
-                    bg=PANEL, fg=MORADO_CLARO,
-                    font=("Segoe UI", 8, "bold")
-                ).grid(row=0, column=col, pady=(8, 5))
+            def mover(delta):
+                actual = mes_visible[0]
+                indice = actual.month - 1 + delta
+                mes_visible[0] = date(actual.year + indice // 12, indice % 12 + 1, 1)
+                dibujar()
 
-            for fila, semana in enumerate(
-                calendar.monthcalendar(actual.year, actual.month), start=1
-            ):
-                for col, numero in enumerate(semana):
-                    if numero == 0:
-                        tk.Label(
-                            calendario_dias, text="", width=5, bg=PANEL
-                        ).grid(row=fila, column=col, padx=1, pady=1)
-                        continue
-                    elegido = (
-                        actual.year == date.fromisoformat(fecha_var.get()).year
-                        and actual.month == date.fromisoformat(fecha_var.get()).month
-                        and numero == date.fromisoformat(fecha_var.get()).day
-                    )
+            def elegir(dia):
+                actual = mes_visible[0]
+                fecha_var.set(date(actual.year, actual.month, dia).isoformat())
+                cerrar_popup()
+
+            def dibujar():
+                for w in cab.winfo_children() + dias.winfo_children():
+                    w.destroy()
+                actual = mes_visible[0]
+                elegida = fecha_valida(fecha_var.get())
+                hoy = date.today()
+                for texto, delta, lado in (("‹", -1, "left"), ("›", 1, "right")):
                     tk.Button(
-                        calendario_dias, text=str(numero), width=4,
-                        command=lambda d=numero: seleccionar_fecha(d),
-                        bg=MORADO if elegido else PANEL_SECUNDARIO,
-                        fg=BLANCO, activebackground=MORADO_CLARO,
-                        relief="flat", font=("Segoe UI", 8), cursor="hand2"
-                    ).grid(row=fila, column=col, padx=2, pady=2, ipady=3)
+                        cab, text=texto, width=3, command=lambda d=delta: mover(d),
+                        bg=PANEL_CLARO, fg=BLANCO, activebackground=MORADO,
+                        relief="flat", cursor="hand2"
+                    ).pack(side=lado)
+                tk.Label(
+                    cab, text=f"{meses[actual.month]} {actual.year}",
+                    bg=PANEL, fg=BLANCO, font=("Segoe UI", 11, "bold")
+                ).pack(side="left", expand=True)
+                for col, nombre_dia in enumerate("LMXJVSD"):
+                    tk.Label(
+                        dias, text=nombre_dia, width=4, bg=PANEL,
+                        fg=MORADO_CLARO, font=("Segoe UI", 8, "bold")
+                    ).grid(row=0, column=col, pady=(4, 4))
+                for fila, semana in enumerate(
+                    calendar.monthcalendar(actual.year, actual.month), start=1
+                ):
+                    for col, numero in enumerate(semana):
+                        if numero == 0:
+                            continue
+                        dia = date(actual.year, actual.month, numero)
+                        color = (
+                            MORADO if dia == elegida
+                            else PANEL_CLARO if dia == hoy
+                            else PANEL_SECUNDARIO
+                        )
+                        tk.Button(
+                            dias, text=str(numero), width=4,
+                            command=lambda d=numero: elegir(d),
+                            bg=color, fg=CORAL if dia < hoy else BLANCO,
+                            activebackground=MORADO_CLARO, relief="flat",
+                            font=("Segoe UI", 9), cursor="hand2"
+                        ).grid(row=fila, column=col, padx=2, pady=2, ipady=3)
 
-        def mover_mes(delta):
-            actual = fecha_calendario[0]
-            indice = actual.month - 1 + delta
-            anio = actual.year + indice // 12
-            mes = indice % 12 + 1
-            fecha_calendario[0] = date(anio, mes, 1)
-            dibujar_calendario()
-
-        def seleccionar_fecha(dia):
-            actual = fecha_calendario[0]
-            fecha_var.set(date(actual.year, actual.month, dia).isoformat())
-            calendario_panel.pack_forget()
-            calendario_visible[0] = False
-            boton_calendario.configure(text="▦  Elegir fecha")
-
-        def alternar_calendario():
-            if calendario_visible[0]:
-                calendario_panel.pack_forget()
-                calendario_visible[0] = False
-                boton_calendario.configure(text="▦  Elegir fecha")
-            else:
-                actual = date.fromisoformat(fecha_var.get())
-                fecha_calendario[0] = date(actual.year, actual.month, 1)
-                dibujar_calendario()
-                calendario_panel.pack(fill="x", pady=(8, 0))
-                calendario_visible[0] = True
-                boton_calendario.configure(text="✕  Ocultar calendario")
+            popup.protocol("WM_DELETE_WINDOW", cerrar_popup)
+            popup.bind("<Escape>", lambda e: cerrar_popup())
+            dibujar()
+            popup.grab_set()
+            popup.focus_set()
 
         boton_calendario = self.boton(
-            fila_fecha, "▦  Elegir fecha", alternar_calendario,
+            fila_fecha, "▦  Elegir fecha", abrir_calendario,
             color=PANEL_CLARO
         )
         boton_calendario.pack(side="left", padx=(10, 0))
@@ -743,6 +810,28 @@ class Aplicacion:
             state="readonly", style="Formulario.TCombobox"
         )
         selector_categoria.pack(fill="x", ipady=3)
+
+        def al_cambiar_nombre(*_):
+            base = catalogo.nutricion_100g(nombre_var.get())
+            info_nutricion.config(
+                text=("Por 100 g: " + catalogo.texto_nutricion(base))
+                if base else ""
+            )
+
+        def al_elegir_catalogo(event=None):
+            ficha = catalogo.buscar(nombre_var.get())
+            if not ficha:
+                return
+            categoria_var.set(ficha[1][0])
+            unidad_var.set(ficha[1][1])
+            if not campo_cantidad.get().strip():
+                campo_cantidad.insert(0, "1")
+            if not alimento:
+                fecha_var.set(catalogo.fecha_sugerida(ficha[0]))
+
+        nombre_var.trace_add("write", al_cambiar_nombre)
+        campo_nombre.bind("<<ComboboxSelected>>", al_elegir_catalogo)
+        al_cambiar_nombre()
 
         pie = tk.Frame(ventana, bg=FONDO)
         pie.pack(fill="x", padx=38, pady=(8, 22))
@@ -775,7 +864,7 @@ class Aplicacion:
                         Alimento(nuevo_codigo, nombre, cantidad, unidad, fecha, categoria)
                     )
 
-                guardar_datos(self.inventario)
+                self.guardar()
                 ventana.destroy()
                 self.mostrar_inventario()
                 messagebox.showinfo(
@@ -793,6 +882,164 @@ class Aplicacion:
             pie, "Cancelar", ventana.destroy, color=PANEL_CLARO
         ).pack(side="right", padx=(0, 10))
         campo_nombre.focus_set()
+
+    def seleccion_rapida(self):
+        """Ventana con ingredientes predefinidos para marcar con un clic."""
+        ventana = tk.Toplevel(self.ventana)
+        ventana.title("¿Qué hay en tu refri?")
+        ventana.configure(bg=FONDO)
+        ventana.transient(self.ventana)
+        ventana.grab_set()
+        ancho, alto = 940, 720
+        ventana.update_idletasks()
+        x = self.ventana.winfo_rootx() + max(0, (self.ventana.winfo_width() - ancho) // 2)
+        y = self.ventana.winfo_rooty() + max(0, (self.ventana.winfo_height() - alto) // 2)
+        ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        seleccionados = set()
+        chips = {}
+        en_inventario = {a.nombre.lower() for a in self.inventario}
+
+        cabecera = tk.Frame(ventana, bg=PANEL, padx=26, pady=16)
+        cabecera.pack(fill="x")
+        tk.Label(
+            cabecera, text="🧊  ¿Qué hay en tu refrigerador?",
+            bg=PANEL, fg=BLANCO, font=("Segoe UI", 18, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            cabecera,
+            text="Toca los ingredientes que tienes. Se agregan con cantidad 1 "
+                 "y una fecha de vencimiento sugerida (puedes editarlas después).",
+            bg=PANEL, fg=GRIS, font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(2, 10))
+
+        busqueda_var = tk.StringVar()
+        tk.Entry(
+            cabecera, textvariable=busqueda_var, bg=PANEL_SECUNDARIO,
+            fg=BLANCO, insertbackground=BLANCO, relief="flat",
+            font=("Segoe UI", 11), highlightthickness=1,
+            highlightbackground=BORDE, highlightcolor=MORADO
+        ).pack(fill="x", ipady=8)
+
+        # Zona desplazable con los ingredientes agrupados por categoría.
+        zona = tk.Frame(ventana, bg=FONDO)
+        zona.pack(fill="both", expand=True, padx=20, pady=10)
+        lienzo = tk.Canvas(zona, bg=FONDO, highlightthickness=0)
+        barra = ttk.Scrollbar(zona, orient="vertical", command=lienzo.yview)
+        interior = tk.Frame(lienzo, bg=FONDO)
+        interior.bind(
+            "<Configure>",
+            lambda e: lienzo.configure(scrollregion=lienzo.bbox("all"))
+        )
+        lienzo.create_window((0, 0), window=interior, anchor="nw")
+        lienzo.configure(yscrollcommand=barra.set)
+        lienzo.pack(side="left", fill="both", expand=True)
+        barra.pack(side="right", fill="y")
+        ventana.bind(
+            "<MouseWheel>",
+            lambda e: lienzo.yview_scroll(int(-e.delta / 120), "units")
+        )
+
+        pie = tk.Frame(ventana, bg=PANEL, padx=22, pady=12)
+        pie.pack(fill="x", side="bottom")
+        info = tk.Label(
+            pie, text="Toca un ingrediente para ver su información nutricional.",
+            bg=PANEL, fg=GRIS, font=("Segoe UI", 9), anchor="w", justify="left"
+        )
+        info.pack(side="left", fill="x", expand=True)
+
+        def pintar(nombre):
+            chip = chips[nombre]
+            activo = nombre in seleccionados
+            chip.config(
+                bg=MORADO if activo else PANEL_SECUNDARIO,
+                fg=BLANCO if activo else TEXTO,
+                text=("✓ " if activo else "") + nombre
+            )
+
+        def alternar(nombre):
+            seleccionados.symmetric_difference_update({nombre})
+            pintar(nombre)
+            base = catalogo.nutricion_100g(nombre)
+            info.config(
+                text=f"{nombre} (por 100 g)\n{catalogo.texto_nutricion(base)}",
+                fg=TEXTO
+            )
+            boton_agregar.config(
+                text=f"Agregar {len(seleccionados)} ingrediente(s)"
+            )
+
+        def dibujar(*_):
+            for w in interior.winfo_children():
+                w.destroy()
+            chips.clear()
+            filtro = busqueda_var.get().strip().lower()
+            for categoria, nombres in catalogo.por_categoria().items():
+                visibles = [n for n in nombres if filtro in n.lower()]
+                if not visibles:
+                    continue
+                tk.Label(
+                    interior, text=categoria.upper(), bg=FONDO,
+                    fg=MORADO_CLARO, font=("Segoe UI", 9, "bold")
+                ).pack(anchor="w", pady=(12, 6))
+                grilla = tk.Frame(interior, bg=FONDO)
+                grilla.pack(anchor="w")
+                for i, nombre in enumerate(visibles):
+                    chip = tk.Label(
+                        grilla, width=17, pady=8, cursor="hand2",
+                        font=("Segoe UI", 10), relief="flat",
+                        highlightthickness=1,
+                        highlightbackground=(
+                            TURQUESA if nombre.lower() in en_inventario
+                            else BORDE
+                        )
+                    )
+                    chip.grid(row=i // 5, column=i % 5, padx=4, pady=4)
+                    chip.bind("<Button-1>", lambda e, n=nombre: alternar(n))
+                    chips[nombre] = chip
+                    pintar(nombre)
+            tk.Label(
+                interior, text="Borde turquesa = ya está en tu inventario.",
+                bg=FONDO, fg=GRIS, font=("Segoe UI", 8)
+            ).pack(anchor="w", pady=(14, 4))
+
+        def agregar():
+            if not seleccionados:
+                messagebox.showinfo(
+                    "Nada seleccionado",
+                    "Toca al menos un ingrediente.", parent=ventana
+                )
+                return
+            for nombre in sorted(seleccionados):
+                categoria, unidad = catalogo.CATALOGO[nombre][:2]
+                existente = next(
+                    (a for a in self.inventario
+                     if a.nombre.lower() == nombre.lower() and a.unidad == unidad),
+                    None
+                )
+                if existente:
+                    existente.cantidad = float(existente.cantidad) + 1
+                else:
+                    self.inventario.append(Alimento(
+                        generar_codigo(self.inventario), nombre, 1.0, unidad,
+                        catalogo.fecha_sugerida(nombre), categoria
+                    ))
+            self.guardar()
+            total = len(seleccionados)
+            ventana.destroy()
+            self.seleccionar_menu("Inventario", self.mostrar_inventario)
+            messagebox.showinfo(
+                "Listo", f"Se agregaron {total} ingrediente(s) a tu inventario."
+            )
+
+        boton_agregar = self.boton(pie, "Agregar 0 ingrediente(s)", agregar,
+                                   color=EXITO)
+        boton_agregar.pack(side="right")
+        self.boton(pie, "Cancelar", ventana.destroy,
+                   color=PANEL_CLARO).pack(side="right", padx=8)
+
+        busqueda_var.trace_add("write", dibujar)
+        dibujar()
 
     def obtener_seleccion(self):
         seleccion = self.tabla.selection()
@@ -821,7 +1068,7 @@ class Aplicacion:
             f"¿Eliminar {alimento.nombre} del inventario?"
         ):
             self.inventario.remove(alimento)
-            guardar_datos(self.inventario)
+            self.guardar()
             self.mostrar_inventario()
 
     # ==================================================
@@ -1161,6 +1408,54 @@ class Aplicacion:
             AMARILLO
         )
 
+        calorias = sum(
+            (catalogo.nutricion_total(a.nombre, a.cantidad, a.unidad) or {})
+            .get("kcal", 0)
+            for a in disponibles
+        )
+        self.tarjeta(
+            tarjetas,
+            "Calorías en tu refri",
+            f"{calorias:,.0f}",
+            MORADO_CLARO
+        )
+
+        # Selector de ingredientes: el usuario elige con qué cocinar.
+        elegir = self.panel(self.contenido, 14)
+        elegir.pack(fill="x", padx=30, pady=(5, 0))
+        tk.Label(
+            elegir, text="¿CON QUÉ QUIERES COCINAR?  (toca para quitar o agregar)",
+            bg=PANEL, fg=GRIS, font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(0, 8))
+        grilla = tk.Frame(elegir, bg=PANEL)
+        grilla.pack(anchor="w")
+        usar = {id(a): True for a in disponibles}
+
+        def alternar_ingrediente(alimento, chip):
+            usar[id(alimento)] = not usar[id(alimento)]
+            activo = usar[id(alimento)]
+            chip.config(
+                bg=MORADO if activo else PANEL_SECUNDARIO,
+                fg=BLANCO if activo else GRIS,
+                text=("✓ " if activo else "") + alimento.nombre
+            )
+
+        for i, a in enumerate(disponibles):
+            chip = tk.Label(
+                grilla, text="✓ " + a.nombre, bg=MORADO, fg=BLANCO,
+                font=("Segoe UI", 9), padx=12, pady=5, cursor="hand2"
+            )
+            chip.grid(row=i // 8, column=i % 8, padx=3, pady=3, sticky="w")
+            chip.bind(
+                "<Button-1>",
+                lambda e, al=a, c=chip: alternar_ingrediente(al, c)
+            )
+        if not disponibles:
+            tk.Label(
+                grilla, text="No hay alimentos disponibles.",
+                bg=PANEL, fg=GRIS
+            ).pack(anchor="w")
+
         zona = self.panel(self.contenido, 18)
         zona.pack(fill="both", expand=True, padx=30, pady=15)
 
@@ -1208,6 +1503,15 @@ class Aplicacion:
             font=("Segoe UI", 10, "bold")
         )
 
+        resultado.tag_configure(
+            "nutricion",
+            foreground=AMARILLO,
+            background="#2B2A33",
+            font=("Segoe UI", 10, "bold"),
+            lmargin1=10,
+            lmargin2=10
+        )
+
         estado = tk.Label(
             zona,
             text="●  Esperando solicitud",
@@ -1222,10 +1526,12 @@ class Aplicacion:
             resultado.delete("1.0", "end")
 
             for linea in texto.splitlines():
-                limpia = linea.strip()
+                limpia = linea.strip().replace("**", "").lstrip("# ")
 
                 if not limpia:
                     resultado.insert("end", "\n")
+                elif limpia.lower().startswith("calorías:"):
+                    resultado.insert("end", "  " + limpia + "\n", "nutricion")
                 elif limpia.upper().startswith("RECETA:"):
                     resultado.insert("end", limpia + "\n", "titulo")
                 elif limpia.endswith(":"):
@@ -1240,6 +1546,13 @@ class Aplicacion:
             )
 
         def generar():
+            elegidos = [a for a in disponibles if usar[id(a)]]
+            if disponibles and not elegidos:
+                messagebox.showinfo(
+                    "Sin ingredientes",
+                    "Selecciona al menos un ingrediente para cocinar."
+                )
+                return
             if not disponibles:
                 messagebox.showinfo(
                     "Inventario vacío",
@@ -1262,35 +1575,42 @@ class Aplicacion:
             )
             resultado.config(state="disabled")
 
+            respuesta = []
+
+            # Tkinter no es seguro entre hilos: el hilo solo calcula y el
+            # hilo principal revisa cada 200 ms si ya hay respuesta.
             def trabajo():
                 try:
-                    respuesta = generar_recetas(self.inventario)
+                    respuesta.append(generar_recetas(elegidos))
                 except Exception as error:
-                    respuesta = f"No se pudieron generar las recetas: {error}"
+                    respuesta.append(
+                        f"No se pudieron generar las recetas: {error}"
+                    )
 
-                self.ventana.after(
-                    0,
-                    lambda: terminar(respuesta)
-                )
-
-            def terminar(respuesta):
-                if not self.ventana.winfo_exists():
+            def esperar():
+                if not resultado.winfo_exists():
                     return
-
-                mostrar_resultado(respuesta)
+                if not respuesta:
+                    resultado.after(200, esperar)
+                    return
+                mostrar_resultado(respuesta[0])
                 boton_generar.config(state="normal")
 
             threading.Thread(
                 target=trabajo,
                 daemon=True
             ).start()
+            esperar()
 
         boton_generar = self.boton(
             zona,
             "✦  Generar recetas con IA",
             generar
         )
-        boton_generar.pack(anchor="w")
+        # Se ubica arriba del texto para que nunca quede fuera de la pantalla.
+        boton_generar.pack(anchor="w", pady=(6, 4), before=resultado)
+        estado.pack_configure(before=resultado)
+        resultado.configure(height=10)
 
     # ==================================================
     # ESTADÍSTICAS
@@ -1567,7 +1887,7 @@ class Aplicacion:
         boton_enviar.pack(side="right")
 
         def terminar_consulta(respuesta):
-            if not self.ventana.winfo_exists():
+            if not pregunta.winfo_exists():
                 return
 
             agregar_mensaje(respuesta, False)
@@ -1580,19 +1900,19 @@ class Aplicacion:
             boton_enviar.config(state="normal")
             pregunta.focus_set()
 
-        def consultar_en_hilo(texto):
+        def consultar_en_hilo(texto, buzon):
             try:
-                respuesta = consultar_ia(texto, self.inventario)
+                buzon.append(consultar_ia(texto, self.inventario))
             except Exception as error:
-                respuesta = f"Error al consultar la IA: {error}"
+                buzon.append(f"Error al consultar la IA: {error}")
 
-            try:
-                self.ventana.after(
-                    0,
-                    lambda: terminar_consulta(respuesta)
-                )
-            except tk.TclError:
-                pass
+        def esperar_respuesta(buzon):
+            if not pregunta.winfo_exists():
+                return
+            if buzon:
+                terminar_consulta(buzon[0])
+            else:
+                pregunta.after(200, lambda: esperar_respuesta(buzon))
 
         def enviar():
             texto = pregunta.get().strip()
@@ -1611,11 +1931,13 @@ class Aplicacion:
             pregunta.config(state="disabled")
             boton_enviar.config(state="disabled")
 
+            buzon = []
             threading.Thread(
                 target=consultar_en_hilo,
-                args=(texto,),
+                args=(texto, buzon),
                 daemon=True
             ).start()
+            esperar_respuesta(buzon)
 
         pregunta.bind("<Return>", lambda e: enviar())
         pregunta.focus_set()
@@ -1624,11 +1946,21 @@ class Aplicacion:
     # CERRAR APLICACIÓN
     # ==================================================
 
+    def guardar(self):
+        """Guarda el inventario y avisa si falla (antes fallaba en silencio)."""
+        if guardar_datos(self.inventario):
+            return True
+        messagebox.showerror(
+            "Error al guardar",
+            "No se pudo guardar el inventario en datos/inventario.dat. "
+            "Los cambios siguen en memoria."
+        )
+        return False
+
     def cerrar(self):
-        try:
-            guardar_datos(self.inventario)
-        except Exception as error:
-            messagebox.showerror("Error al guardar", str(error))
+        if not self.guardar() and not messagebox.askyesno(
+            "Salir sin guardar", "¿Cerrar de todas formas y perder los cambios?"
+        ):
             return
 
         self.ventana.destroy()

@@ -4,6 +4,8 @@
 import os
 from datetime import date
 
+from catalogo import nutricion_100g
+
 
 def _cargar_configuracion():
     try:
@@ -54,7 +56,10 @@ def _obtener_inventario(inventario):
             "fecha_vencimiento": str(
                 getattr(alimento, "fecha_vencimiento", "Sin fecha")
             ),
-            "dias_para_vencer": dias
+            "dias_para_vencer": dias,
+            "nutricion_por_100g": nutricion_100g(
+                getattr(alimento, "nombre", "")
+            )
         })
 
     return productos
@@ -93,7 +98,7 @@ def _consultar(prompt, inventario):
             f"Inventario registrado: {productos}\n\n"
             f"Solicitud del usuario: {prompt}"
         ),
-        max_output_tokens=1200
+        max_output_tokens=2500
     )
 
     texto = getattr(respuesta, "output_text", "")
@@ -161,23 +166,39 @@ def generar_recetas(inventario):
 Generá 3 recetas prácticas usando principalmente los alimentos disponibles
 que aparecen en el inventario. Priorizá los que vencen primero.
 
-Para cada receta incluí:
-1. Nombre atractivo.
-2. Ingredientes y cantidades aproximadas, sin inventar existencias.
-3. Preparación paso a paso.
-4. Tiempo aproximado.
-5. Qué alimentos del inventario ayuda a aprovechar.
+Usá EXACTAMENTE este formato de texto plano (sin Markdown, sin # ni **):
 
+RECETA: <nombre atractivo>
+Porciones: <número>   Tiempo: <minutos>
+Ingredientes:
+- <ingrediente> - <cantidad aproximada>
+Preparación:
+1. <paso>
+Información nutricional por porción:
+Calorías: <kcal> | Proteína: <g> | Carbohidratos: <g> | Grasa: <g> | Fibra: <g>
+Información nutricional del platillo completo:
+Calorías: <kcal> | Proteína: <g> | Carbohidratos: <g> | Grasa: <g> | Fibra: <g>
+Aprovecha:
+- <alimentos del inventario que ayuda a aprovechar>
+
+Calculá la información nutricional con los datos "nutricion_por_100g" del
+inventario cuando existan (son valores por 100 g); si faltan, estimalos.
 Si hace falta un ingrediente que no aparece en el inventario, marcálo como
-"Ingrediente adicional por conseguir". No incluyás alimentos vencidos.
-Usá un formato ordenado, fácil de leer y adecuado para cocinar en casa.
+"(ingrediente adicional por conseguir)". No incluyás alimentos vencidos.
 """
 
     try:
         return _consultar(solicitud, disponibles)
     except Exception as error:
+        # Sin clave, sin internet o sin crédito: se usan recetas locales
+        # para que la función siga sirviendo.
         print(f"Error en generar_recetas: {error}")
-        return _mensaje_error(error)
+        from recetas_locales import generar
+        return (
+            "Modo sin conexión: " + _mensaje_error(error) + "\n"
+            "Mientras tanto, estas son recetas sugeridas con tus ingredientes:\n\n"
+            + generar(disponibles)
+        )
 
 
 def _mensaje_error(error):
