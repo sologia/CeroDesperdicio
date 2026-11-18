@@ -93,13 +93,28 @@ def _plantillas(a):
             "Cocina a fuego medio 25-30 minutos hasta que todo esté suave.",
         ]))
 
-    if granos and (verduras or proteinas):
-        g = granos[0]
-        ing = [g] + proteinas[:1] + verduras[:2]
-        recetas.append((f"{g.nombre.title()} con {(proteinas or verduras)[0].nombre.lower()}", ing, [
-            f"Cocina {g.nombre.lower()} según el empaque y escurre si hace falta.",
+    acompanantes = proteinas + verduras
+    for i, g in enumerate(granos):
+        if not acompanantes:
+            break
+        principal = acompanantes[i % len(acompanantes)]
+        nombre_g = g.nombre.lower()
+        if nombre_g == "tortillas":
+            ing = [g, principal] + ([queso] if queso else []) + verduras[:1]
+            recetas.append((f"Quesadillas de {principal.nombre.lower()}" if queso
+                            else f"Tacos de {principal.nombre.lower()}", ing, [
+                f"Cocina {principal.nombre.lower()} en trozos pequeños con sal y especias.",
+                "Calienta las tortillas en un comal.",
+                "Rellena cada tortilla" + (", agrega queso" if queso else "")
+                + " y dóblala; dora 1-2 minutos por lado.",
+                "Sirve con salsa o limón si tienes.",
+            ]))
+            continue
+        ing = [g, principal] + verduras[:2] + ([queso] if queso and nombre_g == "pasta" else [])
+        recetas.append((f"{g.nombre.title()} con {principal.nombre.lower()}", ing, [
+            f"Cocina {nombre_g} según el empaque y escurre si hace falta.",
             "Mientras tanto, saltea los demás ingredientes picados con un poco de aceite.",
-            f"Mezcla todo con {g.nombre.lower()}, ajusta la sal y sirve caliente.",
+            f"Mezcla todo con {nombre_g}, ajusta la sal y sirve caliente.",
         ]))
 
     if frutas:
@@ -137,6 +152,8 @@ def _plantillas(a):
 
 
 def _formato_nutricion(n):
+    if not n["kcal"]:
+        return "Calorías: sin datos (ingredientes fuera del catálogo)"
     return (
         f"Calorías: {n['kcal']:.0f} kcal | Proteína: {n['proteina']:.1f} g | "
         f"Carbohidratos: {n['carbohidratos']:.1f} g | Grasa: {n['grasa']:.1f} g | "

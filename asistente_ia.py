@@ -31,7 +31,13 @@ def _obtener_cliente():
             "No está instalado OpenAI. Ejecutá: pip install openai python-dotenv"
         ) from error
 
-    return OpenAI(api_key=api_key)
+    # OPENAI_BASE_URL permite usar proveedores compatibles con OpenAI,
+    # incluso gratuitos: Google Gemini, Groq u Ollama (local).
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    # Sin límite, una llamada colgada dejaba la app "pensando" hasta 10 min.
+    return OpenAI(
+        api_key=api_key, base_url=base_url, timeout=60, max_retries=0
+    )
 
 
 def _obtener_inventario(inventario):
@@ -90,23 +96,105 @@ def _consultar(prompt, inventario):
     modelo = os.getenv("OPENAI_MODEL", "gpt-5.5").strip() or "gpt-5.5"
     productos = _obtener_inventario(inventario)
 
-    respuesta = cliente.responses.create(
-        model=modelo,
-        instructions=_INSTRUCCIONES,
-        input=(
-            f"Fecha actual: {date.today().isoformat()}\n"
-            f"Inventario registrado: {productos}\n\n"
-            f"Solicitud del usuario: {prompt}"
-        ),
-        max_output_tokens=2500
+    mensaje = (
+        f"Fecha actual: {date.today().isoformat()}\n"
+        f"Inventario registrado: {productos}\n\n"
+        f"Solicitud del usuario: {prompt}"
     )
 
-    texto = getattr(respuesta, "output_text", "")
+    if os.getenv("OPENAI_BASE_URL", "").strip():
+        return _consultar_compatible(cliente, modelo, mensaje)
 
-    if not texto or not texto.strip():
+    parametros = dict(
+        model=modelo,
+        instructions=_INSTRUCCIONES,
+        input=mensaje,
+        # En los modelos con razonamiento, este límite incluye los tokens
+        # que el modelo usa para "pensar"; con poco margen la receta salía
+        # cortada (solo el nombre).
+        max_output_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "12000")),
+    )
+
+    try:
+        # Razonamiento bajo: más rápido, más barato y deja tokens al texto.
+        respuesta = cliente.responses.create(
+            reasoning={"effort": "low"}, **parametros
+        )
+    except Exception as error:
+        if "reasoning" not in str(error).lower():
+            raise
+        # Modelos sin razonamiento (p. ej. gpt-4o) no aceptan ese parámetro.
+        respuesta = cliente.responses.create(**parametros)
+
+    texto = (getattr(respuesta, "output_text", "") or "").strip()
+
+    if getattr(respuesta, "status", "") == "incomplete":
+        aviso = (
+            "\n\n(La respuesta se cortó por el límite de tokens. "
+            "Subí OPENAI_MAX_TOKENS en el archivo .env.)"
+        )
+        return (texto + aviso) if texto else aviso.strip()
+
+    if not texto:
         return "La IA no devolvió una respuesta. Intentá nuevamente."
 
-    return texto.strip()
+    return texto
+
+
+def _consultar_compatible(cliente, modelos, mensaje):
+    """Gemini, Groq, Ollama y otros: usan la API de chat de OpenAI.
+
+    OPENAI_MODEL puede traer varios modelos separados por coma: si uno
+    está retirado (404), saturado (503), sin cuota (429) o tarda demasiado,
+    se prueba el siguiente.
+    """
+    lista = [m.strip() for m in modelos.split(",") if m.strip()]
+    ultimo_error = None
+
+    for modelo in lista:
+        try:
+            respuesta = _chat(cliente, modelo, mensaje)
+            break
+        except Exception as error:
+            print(f"Modelo {modelo} falló: {error}")
+            ultimo_error = error
+    else:
+        raise ultimo_error
+
+    opcion = respuesta.choices[0]
+    texto = (opcion.message.content or "").strip()
+
+    if opcion.finish_reason == "length":
+        aviso = (
+            "\n\n(La respuesta se cortó por el límite de tokens. "
+            "Subí OPENAI_MAX_TOKENS en el archivo .env.)"
+        )
+        return (texto + aviso) if texto else aviso.strip()
+
+    return texto or "La IA no devolvió una respuesta. Intentá nuevamente."
+
+
+def _chat(cliente, modelo, mensaje):
+    parametros = dict(
+        model=modelo,
+        messages=[
+            {"role": "system", "content": _INSTRUCCIONES},
+            {"role": "user", "content": mensaje},
+        ],
+        max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "12000")),
+    )
+
+    try:
+        # Los modelos que "piensan" dejan más tokens para la receta con
+        # razonamiento bajo. Los que no lo admiten dan error y se
+        # reintenta sin ese parámetro.
+        return cliente.chat.completions.create(
+            reasoning_effort="low", **parametros
+        )
+    except Exception as error:
+        if "reasoning" not in str(error).lower():
+            raise
+        return cliente.chat.completions.create(**parametros)
 
 
 def consultar_ia(pregunta, inventario):
@@ -175,9 +263,9 @@ Ingredientes:
 Preparación:
 1. <paso>
 Información nutricional por porción:
-Calorías: <kcal> | Proteína: <g> | Carbohidratos: <g> | Grasa: <g> | Fibra: <g>
+Calorías: <número> kcal | Proteína: <número> g | Carbohidratos: <número> g | Grasa: <número> g | Fibra: <número> g
 Información nutricional del platillo completo:
-Calorías: <kcal> | Proteína: <g> | Carbohidratos: <g> | Grasa: <g> | Fibra: <g>
+Calorías: <número> kcal | Proteína: <número> g | Carbohidratos: <número> g | Grasa: <número> g | Fibra: <número> g
 Aprovecha:
 - <alimentos del inventario que ayuda a aprovechar>
 

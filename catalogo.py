@@ -33,6 +33,7 @@ CATALOGO = {
     "Elote":          ("Verduras", "unidad", 5, 150, 86, 3.3, 19, 1.4, 2.7),
     "Plátano verde":  ("Verduras", "unidad", 7, 250, 122, 1.3, 32, 0.4, 2.3),
     # Carnes
+    "Pollo":          ("Carnes", "kg", 2, 1500, 215, 18.6, 0, 15, 0),
     "Pechuga de pollo": ("Carnes", "kg", 2, 250, 165, 31, 0, 3.6, 0),
     "Carne molida":   ("Carnes", "kg", 2, 450, 250, 26, 0, 17, 0),
     "Bistec de res":  ("Carnes", "kg", 3, 200, 217, 26, 0, 12, 0),
@@ -73,8 +74,12 @@ _GRAMOS_POR_UNIDAD = {"kg": 1000, "g": 1, "lb": 453.6, "litro": 1000, "ml": 1}
 def buscar(nombre):
     """Devuelve la ficha del catálogo (sin distinguir mayúsculas) o None."""
     clave = str(nombre).strip().lower()
+    # Acepta plurales simples: "manzanas" -> "manzana", "limones" -> "limón".
+    candidatos = {clave, clave[:-1], clave[:-2]} if len(clave) > 3 else {clave}
+    sin_tildes = str.maketrans("áéíóú", "aeiou")
+    candidatos = {c.translate(sin_tildes) for c in candidatos}
     for nombre_cat, datos in CATALOGO.items():
-        if nombre_cat.lower() == clave:
+        if nombre_cat.lower().translate(sin_tildes) in candidatos:
             return nombre_cat, datos
     return None
 

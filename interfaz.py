@@ -13,7 +13,8 @@ from gestion import (
     ordenar_por_codigo,
     ordenar_por_vencimiento
 )
-from asistente_ia import consultar_ia, generar_recetas
+from asistente_ia import consultar_ia
+from vista_recetas import VistaRecetas
 import catalogo
 from estilos import *
 
@@ -198,6 +199,7 @@ class Aplicacion:
             command=comando,
             bg=color,
             fg=BLANCO,
+            disabledforeground="#D9D3FF",
             activebackground=MORADO_CLARO,
             activeforeground=BLANCO,
             font=("Segoe UI", 9, "bold"),
@@ -476,7 +478,8 @@ class Aplicacion:
 
         self.etiqueta_nutricion = tk.Label(
             self.contenido,
-            text="Selecciona un alimento para ver su información nutricional.",
+            text="Selecciona un alimento para ver su información nutricional.    "
+                 "Rojo = vencido  ·  Amarillo = vence en 3 días o menos",
             bg=FONDO, fg=GRIS, font=("Segoe UI", 9), anchor="w"
         )
         marco.pack(fill="both", expand=True, padx=30, pady=(0, 25))
@@ -491,11 +494,28 @@ class Aplicacion:
 
         alimentos = self.inventario if lista is None else lista
 
-        for a in alimentos:
+        # Filas alternadas y color según vencimiento.
+        self.tabla.tag_configure("par", background=PANEL)
+        self.tabla.tag_configure("impar", background="#202536")
+        self.tabla.tag_configure("vencido", foreground=CORAL)
+        self.tabla.tag_configure("pronto", foreground=AMARILLO)
+
+        for i, a in enumerate(alimentos):
             n = catalogo.nutricion_total(a.nombre, a.cantidad, a.unidad)
+            try:
+                dias = (date.fromisoformat(str(a.fecha_vencimiento))
+                        - date.today()).days
+            except (ValueError, TypeError):
+                dias = None
+            etiquetas = ["par" if i % 2 == 0 else "impar"]
+            if dias is not None and dias < 0:
+                etiquetas.append("vencido")
+            elif dias is not None and dias <= 3:
+                etiquetas.append("pronto")
             self.tabla.insert(
                 "",
                 "end",
+                tags=tuple(etiquetas),
                 values=(
                     a.codigo,
                     a.nombre,
@@ -890,13 +910,13 @@ class Aplicacion:
         ventana.configure(bg=FONDO)
         ventana.transient(self.ventana)
         ventana.grab_set()
-        ancho, alto = 940, 720
+        ancho, alto = 1060, 740
         ventana.update_idletasks()
         x = self.ventana.winfo_rootx() + max(0, (self.ventana.winfo_width() - ancho) // 2)
         y = self.ventana.winfo_rooty() + max(0, (self.ventana.winfo_height() - alto) // 2)
         ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
 
-        seleccionados = set()
+        seleccionados = {}  # nombre -> tk.StringVar con la cantidad
         chips = {}
         en_inventario = {a.nombre.lower() for a in self.inventario}
 
@@ -908,8 +928,8 @@ class Aplicacion:
         ).pack(anchor="w")
         tk.Label(
             cabecera,
-            text="Toca los ingredientes que tienes. Se agregan con cantidad 1 "
-                 "y una fecha de vencimiento sugerida (puedes editarlas después).",
+            text="Toca los ingredientes que tienes y ajusta la cantidad a la "
+                 "derecha. La fecha de vencimiento se sugiere sola.",
             bg=PANEL, fg=GRIS, font=("Segoe UI", 9)
         ).pack(anchor="w", pady=(2, 10))
 
@@ -924,6 +944,21 @@ class Aplicacion:
         # Zona desplazable con los ingredientes agrupados por categoría.
         zona = tk.Frame(ventana, bg=FONDO)
         zona.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # Panel derecho: lo seleccionado con su cantidad.
+        lateral = tk.Frame(
+            zona, bg=PANEL, width=300, padx=12, pady=10,
+            highlightthickness=1, highlightbackground=BORDE
+        )
+        lateral.pack(side="right", fill="y", padx=(10, 0))
+        lateral.pack_propagate(False)
+        tk.Label(
+            lateral, text="TU SELECCIÓN", bg=PANEL, fg=GRIS,
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w")
+        lista_sel = tk.Frame(lateral, bg=PANEL)
+        lista_sel.pack(fill="both", expand=True, pady=(6, 0))
+
         lienzo = tk.Canvas(zona, bg=FONDO, highlightthickness=0)
         barra = ttk.Scrollbar(zona, orient="vertical", command=lienzo.yview)
         interior = tk.Frame(lienzo, bg=FONDO)
@@ -957,16 +992,66 @@ class Aplicacion:
                 text=("✓ " if activo else "") + nombre
             )
 
+        def leer_cantidad(var):
+            try:
+                valor = float(var.get().replace(",", "."))
+                return valor if 0 < valor < float("inf") else None
+            except ValueError:
+                return None
+
+        def cambiar(var, delta):
+            actual = leer_cantidad(var) or 0
+            nuevo = max(0.5 if actual <= 1 else 1, actual + delta)
+            var.set(f"{nuevo:g}")
+
+        def dibujar_seleccion():
+            for w in lista_sel.winfo_children():
+                w.destroy()
+            if not seleccionados:
+                tk.Label(
+                    lista_sel, text="Aún no eliges nada.", bg=PANEL,
+                    fg=GRIS, font=("Segoe UI", 9)
+                ).pack(anchor="w")
+            for nombre, var in seleccionados.items():
+                unidad = catalogo.CATALOGO[nombre][1]
+                fila = tk.Frame(lista_sel, bg=PANEL)
+                fila.pack(fill="x", pady=3)
+                tk.Label(
+                    fila, text=nombre, bg=PANEL, fg=BLANCO, anchor="w",
+                    font=("Segoe UI", 9, "bold"), width=13
+                ).pack(side="left")
+                for texto, delta in (("−", -1), (None, 0), ("+", 1)):
+                    if texto is None:
+                        tk.Entry(
+                            fila, textvariable=var, width=5, justify="center",
+                            bg=PANEL_SECUNDARIO, fg=BLANCO, relief="flat",
+                            insertbackground=BLANCO, font=("Segoe UI", 10)
+                        ).pack(side="left", ipady=3, padx=2)
+                        continue
+                    tk.Button(
+                        fila, text=texto, width=2, bg=PANEL_CLARO, fg=BLANCO,
+                        activebackground=MORADO, relief="flat", cursor="hand2",
+                        command=lambda v=var, d=delta: cambiar(v, d)
+                    ).pack(side="left")
+                tk.Label(
+                    fila, text=unidad, bg=PANEL, fg=GRIS,
+                    font=("Segoe UI", 8)
+                ).pack(side="left", padx=(4, 0))
+            boton_agregar.config(
+                text=f"Agregar {len(seleccionados)} ingrediente(s)"
+            )
+
         def alternar(nombre):
-            seleccionados.symmetric_difference_update({nombre})
+            if nombre in seleccionados:
+                del seleccionados[nombre]
+            else:
+                seleccionados[nombre] = tk.StringVar(value="1")
             pintar(nombre)
+            dibujar_seleccion()
             base = catalogo.nutricion_100g(nombre)
             info.config(
                 text=f"{nombre} (por 100 g)\n{catalogo.texto_nutricion(base)}",
                 fg=TEXTO
-            )
-            boton_agregar.config(
-                text=f"Agregar {len(seleccionados)} ingrediente(s)"
             )
 
         def dibujar(*_):
@@ -994,7 +1079,7 @@ class Aplicacion:
                             else BORDE
                         )
                     )
-                    chip.grid(row=i // 5, column=i % 5, padx=4, pady=4)
+                    chip.grid(row=i // 4, column=i % 4, padx=4, pady=4)
                     chip.bind("<Button-1>", lambda e, n=nombre: alternar(n))
                     chips[nombre] = chip
                     pintar(nombre)
@@ -1010,7 +1095,18 @@ class Aplicacion:
                     "Toca al menos un ingrediente.", parent=ventana
                 )
                 return
+            invalidos = [n for n, v in seleccionados.items()
+                         if leer_cantidad(v) is None]
+            if invalidos:
+                messagebox.showerror(
+                    "Cantidad incorrecta",
+                    "Revisa la cantidad de: " + ", ".join(invalidos)
+                    + ".\nDebe ser un número mayor que cero.",
+                    parent=ventana
+                )
+                return
             for nombre in sorted(seleccionados):
+                cantidad = leer_cantidad(seleccionados[nombre])
                 categoria, unidad = catalogo.CATALOGO[nombre][:2]
                 existente = next(
                     (a for a in self.inventario
@@ -1018,10 +1114,10 @@ class Aplicacion:
                     None
                 )
                 if existente:
-                    existente.cantidad = float(existente.cantidad) + 1
+                    existente.cantidad = float(existente.cantidad) + cantidad
                 else:
                     self.inventario.append(Alimento(
-                        generar_codigo(self.inventario), nombre, 1.0, unidad,
+                        generar_codigo(self.inventario), nombre, cantidad, unidad,
                         catalogo.fecha_sugerida(nombre), categoria
                     ))
             self.guardar()
@@ -1040,6 +1136,7 @@ class Aplicacion:
 
         busqueda_var.trace_add("write", dibujar)
         dibujar()
+        dibujar_seleccion()
 
     def obtener_seleccion(self):
         seleccion = self.tabla.selection()
@@ -1343,274 +1440,7 @@ class Aplicacion:
 
     def mostrar_recetas(self):
         self.limpiar()
-
-        self.encabezado(
-            "Recetas inteligentes",
-            "Recetas creadas por IA utilizando los alimentos de tu inventario."
-        )
-
-        disponibles = [
-            a for a in self.inventario
-            if float(getattr(a, "cantidad", 0)) > 0
-        ]
-
-        panel = self.panel(self.contenido, 20)
-        panel.pack(fill="x", padx=30, pady=5)
-
-        tk.Label(
-            panel,
-            text="✦  GENERADOR INTELIGENTE DE RECETAS",
-            bg=PANEL,
-            fg=MORADO_CLARO,
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w")
-
-        tk.Label(
-            panel,
-            text=(
-                "La IA analizará tus alimentos disponibles, "
-                "priorizará los próximos a vencer y creará recetas "
-                "con ingredientes reales de tu inventario."
-            ),
-            bg=PANEL,
-            fg=GRIS,
-            font=("Segoe UI", 9),
-            wraplength=850,
-            justify="left"
-        ).pack(anchor="w", pady=(8, 15))
-
-        tarjetas = tk.Frame(self.contenido, bg=FONDO)
-        tarjetas.pack(fill="x", padx=25, pady=10)
-
-        self.tarjeta(
-            tarjetas,
-            "Alimentos disponibles",
-            len(disponibles),
-            TURQUESA
-        )
-
-        proximos = 0
-        for a in disponibles:
-            try:
-                dias = (
-                    date.fromisoformat(a.fecha_vencimiento) - date.today()
-                ).days
-
-                if 0 <= dias <= 7:
-                    proximos += 1
-            except (ValueError, TypeError, AttributeError):
-                pass
-
-        self.tarjeta(
-            tarjetas,
-            "Próximos a vencer",
-            proximos,
-            AMARILLO
-        )
-
-        calorias = sum(
-            (catalogo.nutricion_total(a.nombre, a.cantidad, a.unidad) or {})
-            .get("kcal", 0)
-            for a in disponibles
-        )
-        self.tarjeta(
-            tarjetas,
-            "Calorías en tu refri",
-            f"{calorias:,.0f}",
-            MORADO_CLARO
-        )
-
-        # Selector de ingredientes: el usuario elige con qué cocinar.
-        elegir = self.panel(self.contenido, 14)
-        elegir.pack(fill="x", padx=30, pady=(5, 0))
-        tk.Label(
-            elegir, text="¿CON QUÉ QUIERES COCINAR?  (toca para quitar o agregar)",
-            bg=PANEL, fg=GRIS, font=("Segoe UI", 8, "bold")
-        ).pack(anchor="w", pady=(0, 8))
-        grilla = tk.Frame(elegir, bg=PANEL)
-        grilla.pack(anchor="w")
-        usar = {id(a): True for a in disponibles}
-
-        def alternar_ingrediente(alimento, chip):
-            usar[id(alimento)] = not usar[id(alimento)]
-            activo = usar[id(alimento)]
-            chip.config(
-                bg=MORADO if activo else PANEL_SECUNDARIO,
-                fg=BLANCO if activo else GRIS,
-                text=("✓ " if activo else "") + alimento.nombre
-            )
-
-        for i, a in enumerate(disponibles):
-            chip = tk.Label(
-                grilla, text="✓ " + a.nombre, bg=MORADO, fg=BLANCO,
-                font=("Segoe UI", 9), padx=12, pady=5, cursor="hand2"
-            )
-            chip.grid(row=i // 8, column=i % 8, padx=3, pady=3, sticky="w")
-            chip.bind(
-                "<Button-1>",
-                lambda e, al=a, c=chip: alternar_ingrediente(al, c)
-            )
-        if not disponibles:
-            tk.Label(
-                grilla, text="No hay alimentos disponibles.",
-                bg=PANEL, fg=GRIS
-            ).pack(anchor="w")
-
-        zona = self.panel(self.contenido, 18)
-        zona.pack(fill="both", expand=True, padx=30, pady=15)
-
-        tk.Label(
-            zona,
-            text="Tus recomendaciones",
-            bg=PANEL,
-            fg=BLANCO,
-            font=("Segoe UI", 14, "bold")
-        ).pack(anchor="w")
-
-        resultado = tk.Text(
-            zona,
-            bg=PANEL_SECUNDARIO,
-            fg=TEXTO,
-            insertbackground=BLANCO,
-            font=("Segoe UI", 10),
-            wrap="word",
-            relief="flat",
-            padx=16,
-            pady=14,
-            spacing1=5,
-            spacing3=7
-        )
-        resultado.pack(fill="both", expand=True, pady=12)
-
-        resultado.insert(
-            "end",
-            "Aquí aparecerán las recetas creadas por la inteligencia artificial.\n\n"
-            "Presiona «Generar recetas» para analizar tu inventario."
-        )
-        resultado.config(state="disabled")
-
-        resultado.tag_configure(
-            "titulo",
-            foreground=MORADO_CLARO,
-            font=("Segoe UI", 13, "bold"),
-            spacing1=12,
-            spacing3=7
-        )
-
-        resultado.tag_configure(
-            "subtitulo",
-            foreground=TURQUESA,
-            font=("Segoe UI", 10, "bold")
-        )
-
-        resultado.tag_configure(
-            "nutricion",
-            foreground=AMARILLO,
-            background="#2B2A33",
-            font=("Segoe UI", 10, "bold"),
-            lmargin1=10,
-            lmargin2=10
-        )
-
-        estado = tk.Label(
-            zona,
-            text="●  Esperando solicitud",
-            bg=PANEL,
-            fg=GRIS,
-            font=("Segoe UI", 9)
-        )
-        estado.pack(anchor="w")
-
-        def mostrar_resultado(texto):
-            resultado.config(state="normal")
-            resultado.delete("1.0", "end")
-
-            for linea in texto.splitlines():
-                limpia = linea.strip().replace("**", "").lstrip("# ")
-
-                if not limpia:
-                    resultado.insert("end", "\n")
-                elif limpia.lower().startswith("calorías:"):
-                    resultado.insert("end", "  " + limpia + "\n", "nutricion")
-                elif limpia.upper().startswith("RECETA:"):
-                    resultado.insert("end", limpia + "\n", "titulo")
-                elif limpia.endswith(":"):
-                    resultado.insert("end", limpia + "\n", "subtitulo")
-                else:
-                    resultado.insert("end", limpia + "\n")
-
-            resultado.config(state="disabled")
-            estado.config(
-                text="●  Recetas generadas",
-                fg=EXITO
-            )
-
-        def generar():
-            elegidos = [a for a in disponibles if usar[id(a)]]
-            if disponibles and not elegidos:
-                messagebox.showinfo(
-                    "Sin ingredientes",
-                    "Selecciona al menos un ingrediente para cocinar."
-                )
-                return
-            if not disponibles:
-                messagebox.showinfo(
-                    "Inventario vacío",
-                    "Registra alimentos con cantidad disponible "
-                    "antes de generar recetas."
-                )
-                return
-
-            boton_generar.config(state="disabled")
-            estado.config(
-                text="●  La IA está analizando tu inventario...",
-                fg=AMARILLO
-            )
-
-            resultado.config(state="normal")
-            resultado.delete("1.0", "end")
-            resultado.insert(
-                "end",
-                "Analizando alimentos y preparando recetas...\n"
-            )
-            resultado.config(state="disabled")
-
-            respuesta = []
-
-            # Tkinter no es seguro entre hilos: el hilo solo calcula y el
-            # hilo principal revisa cada 200 ms si ya hay respuesta.
-            def trabajo():
-                try:
-                    respuesta.append(generar_recetas(elegidos))
-                except Exception as error:
-                    respuesta.append(
-                        f"No se pudieron generar las recetas: {error}"
-                    )
-
-            def esperar():
-                if not resultado.winfo_exists():
-                    return
-                if not respuesta:
-                    resultado.after(200, esperar)
-                    return
-                mostrar_resultado(respuesta[0])
-                boton_generar.config(state="normal")
-
-            threading.Thread(
-                target=trabajo,
-                daemon=True
-            ).start()
-            esperar()
-
-        boton_generar = self.boton(
-            zona,
-            "✦  Generar recetas con IA",
-            generar
-        )
-        # Se ubica arriba del texto para que nunca quede fuera de la pantalla.
-        boton_generar.pack(anchor="w", pady=(6, 4), before=resultado)
-        estado.pack_configure(before=resultado)
-        resultado.configure(height=10)
+        self.vista_recetas = VistaRecetas(self)
 
     # ==================================================
     # ESTADÍSTICAS
